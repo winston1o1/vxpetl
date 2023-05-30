@@ -186,3 +186,82 @@ def test_todb_appenddb_cursor():
               ('e', 9),
               ('f', 1))
     ieq(expect, actual)
+
+
+def test_todb_appenddb_modified():
+
+    f = NamedTemporaryFile(delete=False)
+    conn = sqlite3.connect(f.name)
+    conn.execute('create table foobar (foo, bar)')
+    conn.commit()
+
+    # exercise function
+    table = (('foo', 'bar'),
+             ('a', 1),
+             ('b', 2),
+             ('c', 2))
+    todb(table, conn, 'foobar',default=False)
+
+    # check what it did
+    actual = conn.execute('select * from foobar')
+    expect = (('a', 1),
+              ('b', 2),
+              ('c', 2))
+    ieq(expect, actual)
+
+    # try appending
+    table2 = (('foo', 'bar'),
+              ('d', 7),
+              ('e', 9),
+              ('f', 1))
+    appenddb(table2, conn, 'foobar',default=False)
+
+    # check what it did
+    actual = conn.execute('select * from foobar')
+    expect = (('a', 1),
+              ('b', 2),
+              ('c', 2),
+              ('d', 7),
+              ('e', 9),
+              ('f', 1))
+    ieq(expect, actual)
+
+
+def test_todb_appenddb_cursor_modified():
+
+    f = NamedTemporaryFile(delete=False)
+    conn = sqlite3.connect(f.name)
+    conn.execute('create table foobar (foo, bar)')
+    conn.commit()
+
+    # exercise function
+    table = (('foo', 'bar'),
+             ('a', 1),
+             ('b', 2),
+             ('c', 2))
+    cursor = conn.cursor()
+    todb(table, cursor, 'foobar',default=False)
+
+    # check what it did
+    actual = conn.execute('select * from foobar')
+    expect = (('a', 1),
+              ('b', 2),
+              ('c', 2))
+    ieq(expect, actual)
+
+    # try appending
+    table2 = (('foo', 'bar'),
+              ('d', 7),
+              ('e', 9),
+              ('f', 1))
+    appenddb(table2, cursor, 'foobar',default=False)
+
+    # check what it did
+    actual = conn.execute('select * from foobar')
+    expect = (('a', 1),
+              ('b', 2),
+              ('c', 2),
+              ('d', 7),
+              ('e', 9),
+              ('f', 1))
+    ieq(expect, actual)

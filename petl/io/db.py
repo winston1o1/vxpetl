@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 from __future__ import absolute_import, print_function, division
+import itertools
 
 
 # standard library dependencies
 import logging
+import traceback
+import psycopg2
 from petl.compat import next, text_type, string_types
+from typing import Optional,Any,Iterator
+import importlib
+import re
 
 
 # internal dependencies
@@ -19,6 +25,66 @@ from petl.io.db_create import drop_table, create_table
 logger = logging.getLogger(__name__)
 debug = logger.debug
 warning = logger.warning
+
+
+stdlib_io = importlib.import_module('io')
+stdlib_csv = importlib.import_module('csv')
+
+def clean_csv_value(value: Optional[Any]) -> str:
+    # print(value)
+    if value is None:
+        # return r'\N' 
+        return 'NULL'
+    cleaned_value = str(value).replace('\n', '\\n')
+    cleaned_value = cleaned_value.replace('\r', '\\r')
+    cleaned_value = re.sub(r'[^A-Za-z0-9\- .:]', '', cleaned_value)
+    # print(value)
+    return cleaned_value
+
+
+class StringIteratorIO(stdlib_io.TextIOBase):
+
+    def __init__(self, iterator: Iterator[str]):
+        self._iterator = iterator
+        self._buff = ''
+
+    def readable(self) -> bool:
+        return True
+
+    def _read1(self, n: Optional[int] = None) -> str:
+        while not self._buff:
+            try:
+                self._buff = next(self._iterator)
+            except StopIteration:
+                break
+        ret = self._buff[:n]
+        self._buff = self._buff[len(ret):]
+        return ret
+
+    def read(self, n: Optional[int] = None) -> str:
+        line = []
+        if n is None or n < 0:
+            while True:
+                m = self._read1()
+                if not m:
+                    break
+                line.append(m)
+        else:
+            while n > 0:
+                m = self._read1(n)
+                if not m:
+                    break
+                n -= len(m)
+                line.append(m)
+        # print(''.join(line))
+        return ''.join(line)
+    
+    
+
+    # def readline(self, limit: Optional[int] = -1) -> str:
+    #     if limit < 0:
+    #         return self._read1()
+    #     return self._read1(limit)
 
 
 def fromdb(dbo, query, *args, **kwargs):
@@ -208,7 +274,7 @@ def _iter_sqlalchemy_session(session, query, *args, **kwargs):
 
 def todb(table, dbo, tablename, schema=None, commit=True,
          create=False, drop=False, constraints=True, metadata=None,
-         dialect=None, sample=1000):
+         dialect=None, sample=1000,default=True):
     """
     Load data into an existing database table via a DB-API 2.0
     connection or cursor. Note that the database table will be truncated,
@@ -340,7 +406,7 @@ def todb(table, dbo, tablename, schema=None, commit=True,
                          constraints=constraints, metadata=metadata,
                          dialect=dialect, sample=sample)
         _todb(table, dbo, tablename, schema=schema, commit=commit,
-              truncate=True)
+              truncate=True,default=default)
 
     finally:
         if needs_closing:
@@ -350,7 +416,7 @@ def todb(table, dbo, tablename, schema=None, commit=True,
 Table.todb = todb
 
 
-def _todb(table, dbo, tablename, schema=None, commit=True, truncate=False):
+def _todb(table, dbo, tablename, schema=None, commit=True, truncate=False,default=True):
 
     # need to deal with polymorphic dbo argument
     # what sort of duck is it?
@@ -358,19 +424,19 @@ def _todb(table, dbo, tablename, schema=None, commit=True, truncate=False):
     if _is_clikchouse_dbapi_connection(dbo):
         debug('assuming %r is clickhosue DB-API 2.0 connection', dbo)
         _todb_clikchouse_dbapi_connection(table, dbo, tablename, schema=schema,
-                               commit=commit, truncate=truncate)
+                               commit=commit, truncate=truncate,default=default)
 
     # does it quack like a standard DB-API 2.0 connection?
     elif _is_dbapi_connection(dbo):
         debug('assuming %r is standard DB-API 2.0 connection', dbo)
         _todb_dbapi_connection(table, dbo, tablename, schema=schema,
-                               commit=commit, truncate=truncate)
+                               commit=commit, truncate=truncate,default=default)
 
     # does it quack like a standard DB-API 2.0 cursor?
     elif _is_dbapi_cursor(dbo):
         debug('assuming %r is standard DB-API 2.0 cursor')
         _todb_dbapi_cursor(table, dbo, tablename, schema=schema, commit=commit,
-                           truncate=truncate)
+                           truncate=truncate,default=default)
 
     # does it quack like an SQLAlchemy engine?
     elif _is_sqlalchemy_engine(dbo):
@@ -403,10 +469,10 @@ def _todb(table, dbo, tablename, schema=None, commit=True, truncate=False):
 
 SQL_TRUNCATE_QUERY = 'DELETE FROM %s'
 SQL_INSERT_QUERY = 'INSERT INTO %s (%s) VALUES (%s)'
-
+COPY_STATEMENT = "COPY %s (%s) FROM STDIN WITH (FORMAT CSV, DELIMITER '|', HEADER false, NULL 'NULL')"
 
 def _todb_dbapi_connection(table, connection, tablename, schema=None,
-                           commit=True, truncate=False):
+                           commit=True, truncate=False,default=True):
 
     # sanitise table name
     tablename = _quote(tablename)
@@ -438,10 +504,32 @@ def _todb_dbapi_connection(table, connection, tablename, schema=None,
         cursor.close()
         cursor = connection.cursor()
 
+    
     insertcolnames = ', '.join(colnames)
-    insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
-    debug('insert data via query %r' % insertquery)
-    cursor.executemany(insertquery, it)
+    if default:
+        insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
+        debug('insert data via query %r' % insertquery)
+        cursor.executemany(insertquery, it)
+    else:
+        copy_statement_str = COPY_STATEMENT % (tablename, insertcolnames)
+
+        tuple_rows_list = []
+    
+        data_size = table.len()
+        if data_size > 0:
+            data_size = data_size
+
+        # Create generator object for the data
+        print(0)
+        tuple_rows_gen = (('|'.join(map(clean_csv_value, tuple_row)) + 
+                        '\n' if n <= data_size 
+                        else '|'.join(
+            map(clean_csv_value, tuple_row)))
+            for n, tuple_row in enumerate(it, start=0))
+        print(1)
+        data_string_iterator = StringIteratorIO(tuple_rows_gen)
+        print(2)
+        cursor.copy_expert(copy_statement_str, data_string_iterator)
 
     # finish up
     debug('close the cursor')
@@ -453,7 +541,7 @@ def _todb_dbapi_connection(table, connection, tablename, schema=None,
 
 
 def _todb_clikchouse_dbapi_connection(table, connection, tablename, schema=None,
-                           commit=True, truncate=False):
+                           commit=True, truncate=False,default=True):
 
     # sanitise table name
     tablename = _quote(tablename)
@@ -486,9 +574,30 @@ def _todb_clikchouse_dbapi_connection(table, connection, tablename, schema=None,
         cursor = connection.cursor()
 
     insertcolnames = ', '.join(colnames)
-    insertquery = 'INSERT INTO %s (%s) VALUES' % (tablename, insertcolnames)
-    debug('insert data via query %r' % insertquery)
-    cursor.executemany(insertquery, it)
+    if default:
+        insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
+        debug('insert data via query %r' % insertquery)
+        cursor.executemany(insertquery, it)
+    else:
+        copy_statement_str = COPY_STATEMENT % (tablename, insertcolnames)
+
+        tuple_rows_list = []
+    
+        # data_size = table.len()
+        # if data_size > 0:
+        #     data_size = data_size
+
+        # Create generator object for the data
+        # tuple_rows_gen = (('|'.join(map(clean_csv_value, tuple_row)) + 
+        #                 '\n' if n <= data_size 
+        #                 else '|'.join(
+        #     map(clean_csv_value, tuple_row)))
+        #     for n, tuple_row in enumerate(it, start=0))
+        
+        tuple_rows_gen = (('|'.join(map(clean_csv_value, tuple_row)) + '\n') for tuple_row in it)
+        
+        data_string_iterator = StringIteratorIO(tuple_rows_gen)
+        cursor.copy_expert(copy_statement_str, data_string_iterator)
 
     # finish up
     debug('close the cursor')
@@ -500,7 +609,7 @@ def _todb_clikchouse_dbapi_connection(table, connection, tablename, schema=None,
 
 
 def _todb_dbapi_mkcurs(table, mkcurs, tablename, schema=None, commit=True,
-                       truncate=False):
+                       truncate=False,default=True):
 
     # sanitise table name
     tablename = _quote(tablename)
@@ -537,9 +646,30 @@ def _todb_dbapi_mkcurs(table, mkcurs, tablename, schema=None, commit=True,
         cursor = mkcurs()
 
     insertcolnames = ', '.join(colnames)
-    insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
-    debug('insert data via query %r' % insertquery)
-    cursor.executemany(insertquery, it)
+    if default:
+        insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
+        debug('insert data via query %r' % insertquery)
+        cursor.executemany(insertquery, it)
+    else:
+        copy_statement_str = COPY_STATEMENT % (tablename, insertcolnames)
+
+        tuple_rows_list = []
+    
+        data_size = table.len()
+        if data_size > 0:
+            data_size = data_size
+
+        # Create generator object for the data
+        tuple_rows_gen = (('|'.join(map(clean_csv_value, tuple_row)) + 
+                        '\n' if n <= data_size 
+                        else '|'.join(
+            map(clean_csv_value, tuple_row)))
+            for n, tuple_row in enumerate(it, start=0))
+        
+        data_string_iterator = StringIteratorIO(tuple_rows_gen)
+        cursor.copy_expert(copy_statement_str, data_string_iterator)
+
+    
     cursor.close()
 
     if commit:
@@ -548,7 +678,7 @@ def _todb_dbapi_mkcurs(table, mkcurs, tablename, schema=None, commit=True,
 
 
 def _todb_dbapi_cursor(table, cursor, tablename, schema=None, commit=True,
-                       truncate=False):
+                       truncate=False,default=True):
 
     # sanitise table name
     tablename = _quote(tablename)
@@ -581,9 +711,29 @@ def _todb_dbapi_cursor(table, cursor, tablename, schema=None, commit=True,
         cursor.execute(truncatequery)
 
     insertcolnames = ', '.join(colnames)
-    insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
-    debug('insert data via query %r' % insertquery)
-    cursor.executemany(insertquery, it)
+    if default:
+        insertquery = SQL_INSERT_QUERY % (tablename, insertcolnames, placeholders)
+        debug('insert data via query %r' % insertquery)
+        cursor.executemany(insertquery, it)
+    else:
+        copy_statement_str = COPY_STATEMENT % (tablename, insertcolnames)
+    
+        data_size = table.len() - 1
+        if data_size > 0:
+            data_size = data_size
+
+        # Create generator object for the data
+        tuple_rows_gen = (('|'.join(map(clean_csv_value, tuple_row)) + 
+                        '\n' 
+                        if n < data_size
+                        else '|'.join(
+            map(clean_csv_value, tuple_row)
+            ))
+            for n, tuple_row in enumerate(it, start=1))
+        
+        data_string_iterator = StringIteratorIO(tuple_rows_gen)
+
+        cursor.copy_expert(copy_statement_str, data_string_iterator)
 
     # N.B., don't close the cursor, leave that to the application
 
@@ -660,7 +810,7 @@ def _todb_sqlalchemy_session(table, session, tablename, schema=None,
                                 truncate=truncate)
 
 
-def appenddb(table, dbo, tablename, schema=None, commit=True):
+def appenddb(table, dbo, tablename, schema=None, commit=True,default = True):
     """
     Load data into an existing database table via a DB-API 2.0
     connection or cursor. As :func:`petl.io.db.todb` except that the database
@@ -679,7 +829,7 @@ def appenddb(table, dbo, tablename, schema=None, commit=True):
 
     try:
         _todb(table, dbo, tablename, schema=schema, commit=commit,
-              truncate=False)
+              truncate=False,default=default)
 
     finally:
         if needs_closing:

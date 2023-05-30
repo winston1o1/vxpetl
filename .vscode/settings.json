@@ -76,7 +76,7 @@
         "${workspaceFolder}/petl/test/",
         "${workspaceFolder}/petl/test/io",
     ],
-    "python.linting.enabled": true,
+    "python.linting.enabled": false,
     "python.linting.maxNumberOfProblems": 12,
     "python.linting.ignorePatterns": [
         ".vscode/*.py",

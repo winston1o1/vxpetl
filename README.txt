@@ -1,6 +1,9 @@
 petl - Extract, Transform and Load
 ==================================
 
+NOTE: THIS IS MODIFIED REPLICA OF THE ORIGINAL PETL LIBRARY
+DIFFERENCE: IT INCOPERATES THE USE OF COPY COMMAND FOR DB-API 2.0 CONNECTIONS 
+
 ``petl`` is a general purpose Python package for extracting, transforming and 
 loading tables of data.
 

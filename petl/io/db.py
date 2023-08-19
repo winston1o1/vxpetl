@@ -37,7 +37,7 @@ def clean_csv_value(value: Optional[Any]) -> str:
         return 'NULL'
     cleaned_value = str(value).replace('\n', '\\n')
     cleaned_value = cleaned_value.replace('\r', '\\r')
-    cleaned_value = re.sub(r'[^A-Za-z0-9\- .:]', '', cleaned_value)
+    cleaned_value = re.sub(r'[^A-Za-z0-9\- .:+,]', '', cleaned_value)
     # print(value)
     return cleaned_value
 

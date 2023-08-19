@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 
 
 setup(
-    name='petl_x',
+    name='petl_retouched_version',
     author='Alistair Miles',
     author_email='alimanfoo@googlemail.com',
     maintainer='Winston David',
@@ -35,11 +35,12 @@ setup(
         'xpath': ['lxml>=4.4.0'],
         'whoosh': ['whoosh'],
     },
-    use_scm_version={
-        "version_scheme": "guess-next-dev",
-        "local_scheme": "dirty-tag",
-        "write_to": "petl/version.py",
-    },
+    # use_scm_version={
+    #     "version_scheme": "guess-next-dev",
+    #     "local_scheme": "dirty-tag",
+    #     "write_to": "petl/version.py",
+    # },
+    version= '0.1.2',
     classifiers=['Intended Audience :: Developers',
                  'License :: OSI Approved :: MIT License',
                  'Programming Language :: Python :: 2',
